@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: telegram-music-bot
-    env: python
-    plan: free
-    pythonVersion: 3.11.8
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
