@@ -18,8 +18,9 @@ except json.JSONDecodeError as e:
 
 # Инициализация Firebase Admin
 try:
-    cred = credentials.Certificate(FIREBASE_CREDENTIALS)
-    app = firebase_admin.initialize_app(cred)
+    if not firebase_admin._apps:  # предотвращаем повторную инициализацию
+        cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+        firebase_admin.initialize_app(cred)
     db = firestore.client()
 except Exception as e:
     print("Firebase init error:", e)
@@ -28,9 +29,12 @@ except Exception as e:
 
 def init_user_messages_list(user_id: int):
     """
-    Создаёт пустой список сообщений пользователя в Firebase, если его нет.
+    Создает пустой список сообщений пользователя в Firebase, если его нет.
     """
-    user_ref = db.collection("users").document(str(user_id))
-    if not user_ref.get().exists:
-        user_ref.set({"messages": []})
-
+    try:
+        user_ref = db.collection("users").document(str(user_id))
+        if not user_ref.get().exists:
+            user_ref.set({"messages": []})
+    except Exception as e:
+        print(f"Error initializing messages list for user {user_id}: {e}")
+        raise e
