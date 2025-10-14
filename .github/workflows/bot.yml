@@ -1,47 +1,27 @@
-name: Telegram Music Bot (AutoRun)
+name: Telegram Music Bot
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-  schedule:
-    # every 5 hours -> ensures Action restarts before 6h timeout
-    - cron: '0 */5 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      LOGS_CHANNEL_ID: ${{ secrets.LOGS_CHANNEL_ID }}
+      ARCHIVE_CHANNEL_ID: ${{ secrets.ARCHIVE_CHANNEL_ID }}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+      ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v3
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-
+          python-version: "3.11"
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Create firebase service account file
-        env:
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-        run: |
-          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "FIREBASE_SERVICE_ACCOUNT_JSON is not set"
-          else
-            echo "$FIREBASE_SERVICE_ACCOUNT_JSON" > /tmp/firebase_service_account.json
-            echo "Wrote /tmp/firebase_service_account.json"
-          fi
-
-      - name: Run bot (long polling)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-          LOGS_CHANNEL_ID: ${{ secrets.LOGS_CHANNEL_ID }}
-          ARCHIVE_CHANNEL_ID: ${{ secrets.ARCHIVE_CHANNEL_ID }}
-          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
-        run: |
-          echo "Starting bot (this Action will run until completion or 6h timeout)..."
-          python main.py
+        run: pip install -r requirements.txt
+      - name: Run bot
+        run: python main.py
