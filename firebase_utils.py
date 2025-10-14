@@ -1,35 +1,36 @@
-import firebase_admin
-from firebase_admin import credentials, storage, firestore
-from config import FIREBASE_CREDENTIALS, FIREBASE_STORAGE_BUCKET
-import pathlib
+# firebase_utils.py
 
-# ---------------------------
-# Инициализация Firebase
-# ---------------------------
+import os
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Получаем Firebase Service Account из переменной окружения
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+
+if not FIREBASE_SERVICE_ACCOUNT_JSON:
+    raise ValueError("FIREBASE_SERVICE_ACCOUNT_JSON is not set in environment variables")
+
+try:
+    FIREBASE_CREDENTIALS = json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
+except json.JSONDecodeError as e:
+    raise ValueError("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: " + str(e))
+
+# Инициализация Firebase Admin
 try:
     cred = credentials.Certificate(FIREBASE_CREDENTIALS)
-    firebase_app = firebase_admin.initialize_app(cred, {
-        "storageBucket": FIREBASE_STORAGE_BUCKET
-    })
+    app = firebase_admin.initialize_app(cred)
+    db = firestore.client()
 except Exception as e:
     print("Firebase init error:", e)
     raise e
 
-db = firestore.client()
-bucket = storage.bucket()
 
-# ---------------------------
-# Функции для работы с Firebase
-# ---------------------------
-def upload_file_to_storage(local_path: str, dest_name: str) -> str:
-    """Загружает файл в Firebase Storage и возвращает публичный URL"""
-    blob = bucket.blob(dest_name)
-    blob.upload_from_filename(local_path)
-    blob.make_public()
-    return blob.public_url
-
-def save_track_metadata(metadata: dict) -> str:
-    """Сохраняет данные трека в Firestore и возвращает ID документа"""
-    doc_ref = db.collection("tracks").add(metadata)
-    return doc_ref[1].id  # возвращаем ID документа
+def init_user_messages_list(user_id: int):
+    """
+    Создаёт пустой список сообщений пользователя в Firebase, если его нет.
+    """
+    user_ref = db.collection("users").document(str(user_id))
+    if not user_ref.get().exists:
+        user_ref.set({"messages": []})
 
