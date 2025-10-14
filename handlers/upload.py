@@ -6,23 +6,34 @@ from aiogram.types import FSInputFile
 from config import TMP_DOWNLOAD_DIR, ARCHIVE_CHANNEL_ID, LOGS_CHANNEL_ID, ADMIN_USER_IDS
 from texts import TEXTS, TEXTS_EN
 from firebase_utils import upload_file_to_storage, save_track_metadata
-from keyboards import genres_keyboard
+from keyboards import KB_GENRES
 
+# Создаём временную папку для скачивания файлов
 pathlib.Path(TMP_DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
+# ==========================================================
+# Состояния FSM для загрузки трека
+# ==========================================================
 class UploadStates(StatesGroup):
     waiting_for_file = State()
     waiting_for_name = State()
     waiting_for_artist = State()
     waiting_for_genre = State()
 
+# ==========================================================
+# Начало загрузки трека
+# ==========================================================
 async def upload_start_handler(message: types.Message, state: FSMContext):
     if ADMIN_USER_IDS and message.from_user.id not in ADMIN_USER_IDS:
-        await message.reply(TEXTS["only_admin"] if (await state.get_data()).get("lang", "ru") == "ru" else TEXTS_EN["only_admin"])
+        lang = (await state.get_data()).get("lang", "ru")
+        await message.reply(TEXTS["only_admin"] if lang == "ru" else TEXTS_EN["only_admin"])
         return
     await message.reply("Пришлите аудиофайл (mp3/ogg) или документ Telegram с треком:")
     await state.set_state(UploadStates.waiting_for_file)
 
+# ==========================================================
+# Получение аудио/документа
+# ==========================================================
 async def audio_received_handler(message: types.Message, state: FSMContext):
     if not (message.audio or message.document):
         await message.reply("Пожалуйста, пришлите аудиофайл.")
@@ -35,18 +46,26 @@ async def audio_received_handler(message: types.Message, state: FSMContext):
     await message.reply(TEXTS["ask_name"])
     await state.set_state(UploadStates.waiting_for_name)
 
+# ==========================================================
+# Получение названия трека
+# ==========================================================
 async def name_handler(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
     await message.reply(TEXTS["ask_artist"])
     await state.set_state(UploadStates.waiting_for_artist)
 
+# ==========================================================
+# Получение имени исполнителя
+# ==========================================================
 async def artist_handler(message: types.Message, state: FSMContext):
     await state.update_data(artist=message.text.strip())
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    await message.reply(TEXTS["ask_genre"] if lang == "ru" else TEXTS_EN["ask_genre"], reply_markup=genres_keyboard(lang))
+    lang = (await state.get_data()).get("lang", "ru")
+    await message.reply(TEXTS["ask_genre"] if lang == "ru" else TEXTS_EN["ask_genre"], reply_markup=KB_GENRES)
     await state.set_state(UploadStates.waiting_for_genre)
 
+# ==========================================================
+# Получение жанра и финальная загрузка
+# ==========================================================
 async def genre_handler(message: types.Message, state: FSMContext):
     genre = message.text.strip()
     data = await state.get_data()
@@ -54,11 +73,13 @@ async def genre_handler(message: types.Message, state: FSMContext):
     name = data.get("name")
     artist = data.get("artist")
     lang = data.get("lang", "ru")
+
     if not all([local_path, name, artist]):
         await message.reply("Что-то пошло не так — начните загрузку заново.")
         await state.clear()
         return
 
+    # Загружаем файл в Firebase Storage
     dest_name = f"tracks/{pathlib.Path(local_path).name}"
     try:
         public_url = upload_file_to_storage(local_path, dest_name)
@@ -67,13 +88,14 @@ async def genre_handler(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    # Формируем подпись для канала-архива
     caption = f"ID: pending\nNAME: {name}\nARTIST: {artist}\nGENRE: {genre}"
     try:
         await message.bot.send_audio(chat_id=ARCHIVE_CHANNEL_ID, audio=FSInputFile(local_path), caption=caption)
     except Exception as e:
-        # still continue: store metadata
         print("Archive send error:", e)
 
+    # Сохраняем метаданные в Firestore
     metadata = {
         "name": name,
         "artist": artist,
@@ -87,9 +109,9 @@ async def genre_handler(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Optionally log
+    # Логируем в канал логов
     try:
-        await message.bot.send_message(LOGS_CHANNEL_ID, f"User {message.from_user.id} uploaded track {name} ({doc_id})")
+        await message.bot.send_message(LOGS_CHANNEL_ID, f"User {message.from_user.id} uploaded track '{name}' (doc_id={doc_id})")
     except Exception:
         pass
 
