@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-.env
-/tmp/
-*.sqlite3
-*.db
-.DS_Store
