@@ -1,78 +1,18 @@
 from aiogram import types
 
-# ==========================================================
-# 1️⃣ Выбор языка
-# ==========================================================
-KB_LANG = types.ReplyKeyboardMarkup(
-    resize_keyboard=True,
-    keyboard=[
-        [types.KeyboardButton(text="Русский")],
-        [types.KeyboardButton(text="English")]
-    ]
-)
+KB_LANG = types.ReplyKeyboardMarkup(resize_keyboard=True)
+KB_LANG.add(types.KeyboardButton("Русский"), types.KeyboardButton("English"))
 
-# ==========================================================
-# 2️⃣ Главное меню (Русская версия)
-# ==========================================================
-KB_MENU_RU = types.ReplyKeyboardMarkup(
-    resize_keyboard=True,
-    keyboard=[
-        [types.KeyboardButton(text="🎵 Слушать музыку")],
-        [types.KeyboardButton(text="⬆️ Загрузить свой трек")]
-    ]
-)
+KB_MENU_RU = types.ReplyKeyboardMarkup(resize_keyboard=True)
+KB_MENU_RU.add(types.KeyboardButton("Слушать музыку"))
+KB_MENU_RU.add(types.KeyboardButton("Загрузить свой трек"))
 
-# ==========================================================
-# 3️⃣ Главное меню (English version)
-# ==========================================================
-KB_MENU_EN = types.ReplyKeyboardMarkup(
-    resize_keyboard=True,
-    keyboard=[
-        [types.KeyboardButton(text="🎵 Listen to music")],
-        [types.KeyboardButton(text="⬆️ Upload your track")]
-    ]
-)
+KB_MENU_EN = types.ReplyKeyboardMarkup(resize_keyboard=True)
+KB_MENU_EN.add(types.KeyboardButton("Listen music"))
+KB_MENU_EN.add(types.KeyboardButton("Upload your track"))
 
-# ==========================================================
-# 4️⃣ Inline-кнопки жанров (одинаковы для RU и EN)
-# ==========================================================
-GENRES = [
-    "LoFi", "Electronic", "Rock", "Pop", "Trap",
-    "Chill", "Jazz", "Classical", "Game OST", "Other"
-]
+genres = ["LoFi", "Trap", "Techno", "Rock", "Pop", "Jazz", "HipHop", "Chill", "Metal", "Other"]
 
-KB_GENRES = types.InlineKeyboardMarkup(
-    inline_keyboard=[
-        [types.InlineKeyboardButton(text=genre, callback_data=f"genre_{genre}")]
-        for genre in GENRES
-    ]
-)
-
-# ==========================================================
-# 5️⃣ Inline-кнопки плеера
-# ==========================================================
-KB_PLAYER_RU = types.InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            types.InlineKeyboardButton(text="⏮ Назад", callback_data="prev_track"),
-            types.InlineKeyboardButton(text="⭐ Сохранить", callback_data="save_track"),
-            types.InlineKeyboardButton(text="⏭ Вперёд", callback_data="next_track")
-        ],
-        [
-            types.InlineKeyboardButton(text="⬆️ В меню", callback_data="back_to_menu")
-        ]
-    ]
-)
-
-KB_PLAYER_EN = types.InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            types.InlineKeyboardButton(text="⏮ Back", callback_data="prev_track"),
-            types.InlineKeyboardButton(text="⭐ Save", callback_data="save_track"),
-            types.InlineKeyboardButton(text="⏭ Next", callback_data="next_track")
-        ],
-        [
-            types.InlineKeyboardButton(text="⬆️ Menu", callback_data="back_to_menu")
-        ]
-    ]
-)
+KB_GENRES = types.ReplyKeyboardMarkup(resize_keyboard=True)
+for g in genres:
+    KB_GENRES.add(types.KeyboardButton(g))
