@@ -1,0 +1,9 @@
+{
+  "start_message": "Hello! 👋 Choose your language:",
+  "menu": "🎵 Main Menu",
+  "random": "🎲 Random",
+  "genres": "🎧 Genres",
+  "suggest": "🎤 Suggest a Song",
+  "back_menu": "⬅️ Back to Menu",
+  "thanks": "✅ Thank you! Your song has been sent for moderation 🎶"
+} 
