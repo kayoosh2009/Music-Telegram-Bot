@@ -1,10 +1,9 @@
 {
-  "users": 1,
-  "songs_played": 59,
-  "songs_added": 4,
-  "messages_processed": 0,
-  "playlists_created": 1,
-  "playlists_played": 0,
-  "messages_handled": 16,
-  "bot_replied": 1
+  "registered_users": 2,
+  "songs_played": 80,
+  "songs_added": 13,
+  "playlists_created": 4,
+  "playlists_played": 1,
+  "messages_replied": 0,
+  "bot_replies": 2
 }
