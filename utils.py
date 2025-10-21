@@ -1,132 +1,151 @@
 import os
 import json
 import threading
-import time
-from datetime import datetime
+import datetime
 from dotenv import load_dotenv
 
-# ======================================
-# Загрузка .env
-# ======================================
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
-ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", "0"))
+DATA_DIR = "data"
+LOG_FILE = os.path.join(DATA_DIR, "log.txt")
 
-# ======================================
-# Пути к файлам
-# ======================================
-USERS_FILE = "user.json"
-SONGS_FILE = "songs.json"
-STATS_FILE = "stats.json"
-PLAYLISTS_FILE = "playlists.json"
+# files names inside data/
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+SONGS_FILE = os.path.join(DATA_DIR, "songs.json")
+PLAYLISTS_FILE = os.path.join(DATA_DIR, "playlists.json")
+STATS_FILE = os.path.join(DATA_DIR, "stats.json")
+USER_STATE_FILE = os.path.join(DATA_DIR, "user_state.json")
 
-# ======================================
-# Автоматическое создание файлов при запуске
-# ======================================
-def ensure_files():
-    """Создаёт все нужные файлы, если их нет"""
-    for file in [USERS_FILE, SONGS_FILE, STATS_FILE, PLAYLISTS_FILE]:
-        if not os.path.exists(file):
-            with open(file, "w", encoding="utf-8") as f:
-                if file == STATS_FILE:
-                    json.dump({
-                        "registered_users": 0,
-                        "songs_played": 0,
-                        "songs_added": 0,
-                        "playlists_created": 0,
-                        "playlists_played": 0,
-                        "messages_replied": 0
-                    }, f, ensure_ascii=False, indent=2)
-                else:
-                    json.dump([], f, ensure_ascii=False, indent=2)
+os.makedirs(DATA_DIR, exist_ok=True)
 
-ensure_files()
 
-# ======================================
-# Работа с JSON
-# ======================================
-def load_json(filename, default=None):
-    if not os.path.exists(filename):
-        return default or []
+def _safe_load(path, default):
+    if not os.path.exists(path):
+        return default
     try:
-        with open(filename, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except json.JSONDecodeError:
-        return default or []
+    except Exception:
+        # corrupted => return default (do not overwrite file here to avoid data loss)
+        return default
 
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ======================================
-# Пользователи
-# ======================================
+def load_json(path, default):
+    """
+    path: full path (use constants above)
+    default: default return type (list or dict)
+    """
+    return _safe_load(path, default)
+
+
+def save_json(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[utils.save_json] error saving {path}: {e}")
+
+
+def ensure_data_files():
+    """Create files with reasonable defaults if missing (without overwriting existing)."""
+    if not os.path.exists(USERS_FILE):
+        save_json(USERS_FILE, [])                  # list of user objects
+    if not os.path.exists(SONGS_FILE):
+        save_json(SONGS_FILE, [])                  # list of songs
+    if not os.path.exists(PLAYLISTS_FILE):
+        save_json(PLAYLISTS_FILE, [])              # list of playlists
+    if not os.path.exists(STATS_FILE):
+        save_json(STATS_FILE, {
+            "registered_users": 0,
+            "songs_played": 0,
+            "songs_added": 0,
+            "playlists_created": 0,
+            "playlists_played": 0,
+            "messages_replied": 0,
+            "bot_replies": 0
+        })
+    if not os.path.exists(USER_STATE_FILE):
+        save_json(USER_STATE_FILE, {})            # dict user_id -> state
+
+
+# ----------------- user helpers -----------------
 def add_user(user):
+    """
+    user: telebot types.User or object with .id and .username
+    Adds to users.json list if not exists.
+    """
     users = load_json(USERS_FILE, [])
-    if not any(u["id"] == user.id for u in users):
+    uid = int(user.id)
+    if not any(u.get("id") == uid for u in users):
         users.append({
-            "id": user.id,
-            "username": user.username or "аноним",
-            "first_seen": datetime.utcnow().isoformat()
+            "id": uid,
+            "username": getattr(user, "username", "") or "",
+            "first_seen": datetime.datetime.utcnow().isoformat()
         })
         save_json(USERS_FILE, users)
-        update_stats("registered_users", 1)
-        print(f"[NEW USER] @{user.username or 'аноним'} ({user.id})")
+        update_stats("registered_users")
+        log_action(f"👤 Новый пользователь добавлен: {user.username or uid}")
 
-# ======================================
-# Статистика
-# ======================================
+
+# ----------------- stats -----------------
 def update_stats(key, amount=1):
-    stats = load_json(STATS_FILE, {})
-    if key not in stats:
-        stats[key] = 0
-    stats[key] += amount
+    stats = load_json(STATS_FILE, {
+        "registered_users": 0,
+        "songs_played": 0,
+        "songs_added": 0,
+        "playlists_created": 0,
+        "playlists_played": 0,
+        "messages_replied": 0,
+        "bot_replies": 0
+    })
+    stats[key] = stats.get(key, 0) + amount
     save_json(STATS_FILE, stats)
 
-# ======================================
-# Логирование
-# ======================================
-def log_action(bot, log_chat, text):
-    """Отправляет сообщение в лог-канал и выводит в консоль"""
-    if not text:
+
+# ----------------- logging -----------------
+def log_action(text):
+    """Write to local log file and print to console."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {text}"
+    print(line)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[utils.log_action] cannot write log file: {e}")
+
+
+def notify_log(bot, log_channel_id, text):
+    """
+    Send message to log channel (if valid) and write to local log.
+    bot: TeleBot instance or object with send_message
+    log_channel_id: possibly string; safe-cast to int
+    """
+    # always log locally
+    log_action(text)
+    if not log_channel_id:
         return
     try:
-        if log_chat:
-            bot.send_message(log_chat, text)
-        print(f"[LOG] {text}")
+        chat = int(str(log_channel_id).strip())
+    except Exception:
+        return
+    try:
+        bot.send_message(chat, text)
     except Exception as e:
-        print(f"[LOG ERROR] {e}")
+        log_action(f"⚠️ notify_log: failed to send to {chat}: {e}")
 
-# ======================================
-# Heartbeat (проверка активности)
-# ======================================
-def start_heartbeat(bot, log_chat):
-    """Периодически сообщает, что бот жив"""
-    def loop():
-        while True:
-            try:
-                msg = f"💓 Бот активен — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                log_action(bot, log_chat, msg)
-            except Exception as e:
-                print(f"[HEARTBEAT ERROR] {e}")
-            time.sleep(60)  # каждые 60 секунд
 
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
+# ----------------- heartbeat -----------------
+def start_heartbeat(bot, log_channel_id, initial_delay=5, interval_seconds=3600):
+    """
+    Periodically notifies the log channel (and local log) that bot is alive.
+    initial_delay: seconds before first send
+    interval_seconds: seconds between sends (default 3600 = 1 hour)
+    """
+    def _tick():
+        notify_log(bot, log_channel_id, "💓 Бот активен и работает")
+        # schedule next
+        threading.Timer(interval_seconds, _tick).start()
 
-# ======================================
-# Вспомогательная функция для песен
-# ======================================
-def format_song(song):
-    return f"🎧 <b>{song.get('name')}</b>\n👤 {song.get('artist')}\n🎼 {song.get('genre')} | 🌐 {song.get('lang')}"
-
-# ======================================
-# Отладочная печать статистики
-# ======================================
-def print_stats():
-    stats = load_json(STATS_FILE, {})
-    print("📊 Текущая статистика:")
-    for k, v in stats.items():
-        print(f" - {k}: {v}")
+    # schedule first tick
+    threading.Timer(initial_delay, _tick).start()
