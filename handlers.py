@@ -1,310 +1,256 @@
+import os
 import random
 from telebot import types
 from utils import load_json, save_json, add_user, update_stats, log_action
-import user_state  # наш модуль user_state.py
+import user_state
 
-SONGS_FILE = "songs.json"
-PLAYLISTS_FILE = "playlists.json"
+# Пути к JSON
+DATA_DIR = "data"
+SONGS_FILE = os.path.join(DATA_DIR, "songs.json")
+PLAYLISTS_FILE = os.path.join(DATA_DIR, "playlists.json")
 
-def register_handlers(bot):
-    """Регистрирует обработчики. Всё через кнопки, плеер помнит жанр и историю played."""
+# --- Клавиатуры ---
+def kb_main():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🎧 Жанры", "🎲 Рандом")
+    kb.add("🎵 Мои плейлисты", "➕ Создать плейлист")
+    kb.add("📊 Статистика", "💬 Предложить песню")
+    return kb
 
-    # ---- клавиатуры ----
-    def main_menu_kb():
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("🎲 Рандом", "🎧 Жанры")
-        kb.row("🔍 Поиск", "📂 Плейлисты")
-        kb.row("🎤 Предложить песню")
-        return kb
 
-    def player_kb():
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("⏮ Назад", "➕ В плейлист", "⏭ Вперёд")
-        kb.row("🔙 В меню")
-        return kb
+def kb_genres():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    # русские жанры сверху
+    genres = ["Панк", "Постпанк", "Лоуфай", "Поп", "Рок", "Рэп", "Инди"]
+    kb.add(*genres)
+    kb.add("🔙 В меню")
+    return kb
 
-    def create_playlist_kb():
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.add("➕ Создать плейлист", "🔙 В меню")
-        return kb
 
-    # ---- /start ----
-    @bot.message_handler(commands=["start"])
-    def start_cmd(message):
-        add_user(message.from_user)
-        log_action(bot, None, f"/start от @{message.from_user.username or message.from_user.id}")
-        bot.send_message(message.chat.id, "🎵 Добро пожаловать! Выберите действие:", reply_markup=main_menu_kb())
+def kb_player():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("⏮ Назад", "⏭ Вперёд")
+    kb.add("➕ В плейлист", "🔙 В меню")
+    return kb
 
-    # ---- Рандом ----
-    @bot.message_handler(func=lambda m: m.text == "🎲 Рандом")
-    def random_song(message):
-        songs = load_json(SONGS_FILE, [])
-        if not songs:
-            bot.send_message(message.chat.id, "😢 В архиве пока нет песен.", reply_markup=main_menu_kb())
-            return
-        song = random.choice(songs)
-        send_song(bot, message.chat.id, song)
-        update_stats("songs_played")
-        # сбрасываем genre и ставим played только с этой песней
-        user_state.save_user_state(message.from_user.id, {"genre": None, "played": [song["id"]], "last_song_id": song["id"]})
 
-    # ---- Жанры ----
-    @bot.message_handler(func=lambda m: m.text == "🎧 Жанры")
-    def genres_list(message):
-        songs = load_json(SONGS_FILE, [])
-        genres = sorted({s.get("genre", "Unknown") for s in songs})
-        if not genres:
-            bot.send_message(message.chat.id, "🎵 Жанров пока нет.", reply_markup=main_menu_kb())
-            return
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for g in genres:
-            kb.add(g)
-        kb.add("🔙 В меню")
-        bot.send_message(message.chat.id, "🎼 Выберите жанр:", reply_markup=kb)
+def kb_playlist_base():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📜 Мои плейлисты", "➕ Создать плейлист")
+    kb.add("🔙 В меню")
+    return kb
 
-    # ---- Выбор жанра (только если текст совпадает с жанром) ----
-    @bot.message_handler(func=lambda m: True)
-    def choose_genre_or_handle_buttons(message):
-        txt = (message.text or "").strip()
-        chat = message.chat.id
 
-        # кнопка возврата
-        if txt == "🔙 В меню":
-            bot.send_message(chat, "🏠 Главное меню", reply_markup=main_menu_kb())
-            return
+# --- Утилиты ---
+def _norm(txt: str) -> str:
+    return str(txt).strip().lower()
 
-        # команды плеера
-        if txt in {"⏮ Назад", "⏭ Вперёд", "➕ В плейлист"}:
-            # перенаправляем в отдельный handler (внутри одного файла — просто вызываем функцию)
-            handle_player_controls(message)
-            return
 
-        # если это жанр — обрабатываем
-        songs = load_json(SONGS_FILE, [])
-        genres = {s.get("genre", "Unknown") for s in songs}
-        if txt in genres:
-            songs_by_genre = [s for s in songs if (s.get("genre") or "").lower() == txt.lower()]
-            if not songs_by_genre:
-                bot.send_message(chat, "😢 Песен в этом жанре пока нет.", reply_markup=main_menu_kb())
-                return
-            # выбор песни без повторов: отмечаем played
-            state = user_state.get_user_state(message.from_user.id)
-            played = state.get("played", [])
-            available = [s for s in songs_by_genre if s["id"] not in played]
-            if not available:
-                # все сыграны — очистим историю (но сохраним last_song_id если хотим)
-                played = []
-                available = songs_by_genre.copy()
-            song = random.choice(available)
-            played.append(song["id"])
-            state["genre"] = txt
-            state["played"] = played
-            state["last_song_id"] = song["id"]
-            user_state.save_user_state(message.from_user.id, state)
-            send_song(bot, chat, song)
-            update_stats("songs_played")
-            return
-
-        # остальное — проверка на меню-кнопки (игнорируем вводы свободного текста)
-        buttons = {"🎲 Рандом", "🎧 Жанры", "🔍 Поиск", "📂 Плейлисты", "🎤 Предложить песню"}
-        if txt in buttons:
-            # обработчик отдельных кнопок уже создан, просто вернёмся
-            return
-
-        # если текст не распознан — напомнить использовать кнопки
-        bot.send_message(chat, "📱 Пожалуйста, используйте кнопки меню.", reply_markup=main_menu_kb())
-
-    # ---- Плеер: Prev / Next / Add to playlist ----
-    def handle_player_controls(message):
-        txt = (message.text or "").strip()
-        chat = message.chat.id
-        user_id = message.from_user.id
-
-        songs = load_json(SONGS_FILE, [])
-        if not songs:
-            bot.send_message(chat, "😢 В архиве нет песен.", reply_markup=main_menu_kb())
-            return
-
-        state = user_state.get_user_state(user_id)
-        genre = state.get("genre")  # может быть None
-        played = state.get("played", [])
-        last_song_id = state.get("last_song_id")
-
-        # используем pool — если genre задан, берём песни только из него
-        if genre:
-            pool = [s for s in songs if (s.get("genre") or "").lower() == genre.lower()]
+def _send_audio(bot, chat_id, song):
+    """Отправка трека пользователю"""
+    try:
+        if str(song["url"]).startswith("file_id:"):
+            file_id = song["url"].replace("file_id:", "")
+            bot.send_audio(chat_id, file_id, title=song["name"], performer=song["artist"])
         else:
-            pool = songs.copy()
+            bot.send_message(chat_id, f"⚠️ Файл не найден для {song['name']}")
+    except Exception as e:
+        bot.send_message(chat_id, f"Ошибка при отправке трека: {e}")
+        log_action(f"Ошибка отправки трека {song.get('name')}: {e}")
 
-        # убрать повторы подряд: доступные — те, что не в played
-        available = [s for s in pool if s["id"] not in played]
 
-        if txt == "⏭ Вперёд":
+# === РЕГИСТРАЦИЯ ВСЕХ ХЕНДЛЕРОВ ===
+def register_handlers(bot):
+    # /start
+    @bot.message_handler(commands=["start"])
+    def cmd_start(msg):
+        add_user(msg.from_user)
+        update_stats("registered_users")
+        bot.send_message(
+            msg.chat.id,
+            f"Привет, {msg.from_user.first_name}! 👋\n\nЯ — Telegram Music 🎧\n"
+            "Выбери жанр или включи рандом, чтобы начать слушать!",
+            reply_markup=kb_main(),
+        )
+        log_action(f"Пользователь {msg.from_user.id} запустил бота")
+
+    # Главное меню
+    @bot.message_handler(func=lambda m: _norm(m.text) in {_norm("🏠 меню"), _norm("🔙 в меню")})
+    def cmd_menu(msg):
+        bot.send_message(msg.chat.id, "🏠 Главное меню", reply_markup=kb_main())
+
+    # --- ЖАНРЫ ---
+    @bot.message_handler(func=lambda m: _norm(m.text) in {_norm("🎧 жанры")})
+    def cmd_genres(msg):
+        bot.send_message(msg.chat.id, "Выберите жанр:", reply_markup=kb_genres())
+
+    @bot.message_handler(func=lambda m: _norm(m.text) in {_norm(x) for x in ["панк", "постпанк", "лоуфай", "поп", "рок", "рэп", "инди"]})
+    def handle_genre_selection(msg):
+        genre = msg.text.strip()
+        songs = load_json(SONGS_FILE, [])
+        available = [s for s in songs if _norm(s.get("genre")) == _norm(genre)]
+
+        if not available:
+            bot.send_message(msg.chat.id, f"⚠️ Нет песен в жанре {genre}.", reply_markup=kb_main())
+            return
+
+        song = random.choice(available)
+        _send_audio(bot, msg.chat.id, song)
+
+        user_state.save_user_state(msg.from_user.id, {"genre": genre, "played": [song["id"]], "last_song_id": song["id"]})
+        update_stats("songs_played")
+
+        bot.send_message(msg.chat.id, "🎧 Управление плеером:", reply_markup=kb_player())
+
+    # --- РАНДОМ ---
+    @bot.message_handler(func=lambda m: _norm(m.text) == _norm("🎲 рандом"))
+    def cmd_random(msg):
+        songs = load_json(SONGS_FILE, [])
+        if not songs:
+            bot.send_message(msg.chat.id, "Нет песен для воспроизведения.", reply_markup=kb_main())
+            return
+
+        st = user_state.get_user_state(msg.from_user.id)
+        played = st.get("played", [])
+
+        available = [s for s in songs if s["id"] not in played]
+        if not available:
+            st["played"] = []
+            user_state.save_user_state(msg.from_user.id, st)
+            available = songs
+
+        song = random.choice(available)
+        _send_audio(bot, msg.chat.id, song)
+
+        st.setdefault("played", []).append(song["id"])
+        st["last_song_id"] = song["id"]
+        user_state.save_user_state(msg.from_user.id, st)
+
+        update_stats("songs_played")
+        bot.send_message(msg.chat.id, "🎧 Управление плеером:", reply_markup=kb_player())
+
+    # --- ПЛЕЕР ---
+    @bot.message_handler(func=lambda m: _norm(m.text) in {_norm("⏭ вперёд"), _norm("⏮ назад"), _norm("➕ в плейлист"), _norm("🔙 в меню")})
+    def cmd_player_controls(msg):
+        txt = _norm(msg.text)
+        chat = msg.chat.id
+        uid = msg.from_user.id
+
+        if txt == _norm("🔙 в меню"):
+            bot.send_message(chat, "🏠 Главное меню", reply_markup=kb_main())
+            return
+
+        songs = load_json(SONGS_FILE, [])
+        if not songs:
+            bot.send_message(chat, "⚠️ Нет песен.", reply_markup=kb_main())
+            return
+
+        st = user_state.get_user_state(uid)
+        genre = st.get("genre")
+        played = st.get("played", [])
+        last_id = st.get("last_song_id")
+
+        # Вперёд
+        if txt == _norm("⏭ вперёд"):
+            pool = [s for s in songs if not genre or _norm(s.get("genre")) == _norm(genre)]
+            available = [s for s in pool if s["id"] not in played and s["id"] != last_id]
+
             if not available:
-                # если все сыграны — очистим историю и доступен весь пул
-                played = []
-                available = pool.copy()
-            # выбираем случайную из available
+                st["played"] = []
+                user_state.save_user_state(uid, st)
+                available = [s for s in pool if s["id"] != last_id]
+
+            if not available:
+                bot.send_message(chat, "🎵 Это все песни в этом жанре!", reply_markup=kb_main())
+                return
+
             song = random.choice(available)
-            played.append(song["id"])
-            state["played"] = played
-            state["last_song_id"] = song["id"]
-            user_state.save_user_state(user_id, state)
-            send_song(bot, chat, song)
+            st.setdefault("played", []).append(song["id"])
+            st["last_song_id"] = song["id"]
+            user_state.save_user_state(uid, st)
+
+            _send_audio(bot, chat, song)
             update_stats("songs_played")
             return
 
-        if txt == "⏮ Назад":
-            # попробуем найти предыдущую: если played есть и len>1 — вернём предыдущий элемент
-            if played and len(played) >= 2:
-                # current is last element; previous is -2
+        # Назад
+        if txt == _norm("⏮ назад"):
+            if len(played) >= 2:
                 prev_id = played[-2]
-                prev_song = next((s for s in pool if s["id"] == prev_id), None)
+                prev_song = next((s for s in songs if s["id"] == prev_id), None)
                 if prev_song:
-                    # откатываем played: удаляем последний (current), оставляем prev как последний
-                    played = played[:-1]
-                    state["played"] = played
-                    state["last_song_id"] = prev_id
-                    user_state.save_user_state(user_id, state)
-                    send_song(bot, chat, prev_song)
+                    st["played"] = played[:-1]
+                    st["last_song_id"] = prev_id
+                    user_state.save_user_state(uid, st)
+                    _send_audio(bot, chat, prev_song)
                     return
-            # если нет истории — просто сработает как вперёд (или случайная)
-            if not pool:
-                bot.send_message(chat, "Нет доступных треков.", reply_markup=main_menu_kb())
-                return
-            song = random.choice(pool)
-            # обновляем played: добавляем, но не душим массив
-            if song["id"] not in played:
-                played.append(song["id"])
-            state["played"] = played
-            state["last_song_id"] = song["id"]
-            user_state.save_user_state(user_id, state)
-            send_song(bot, chat, song)
-            update_stats("songs_played")
+            bot.send_message(chat, "Нет предыдущей песни.", reply_markup=kb_player())
             return
 
-        if txt == "➕ В плейлист":
-            # добавление текущей песни в плейлист
-            if not last_song_id:
-                bot.send_message(chat, "Нет последней проигранной песни для добавления.", reply_markup=main_menu_kb())
+        # Добавить в плейлист
+        if txt == _norm("➕ в плейлист"):
+            last = st.get("last_song_id")
+            if not last:
+                bot.send_message(chat, "Нет активной песни для добавления.", reply_markup=kb_main())
                 return
-            # загрузим плейлисты пользователя (структура: dict user_id -> list of playlists)
-            pls_all = load_json(PLAYLISTS_FILE, {})
-            pls_user = pls_all.get(str(user_id), [])
-            if not pls_user:
-                bot.send_message(chat, "У вас нет плейлистов. Хотите создать?", reply_markup=create_playlist_kb())
+
+            pls = load_json(PLAYLISTS_FILE, [])
+            my = [p for p in pls if p["owner_id"] == uid]
+            if not my:
+                bot.send_message(chat, "У вас нет плейлистов.", reply_markup=kb_playlist_base())
                 return
-            # предложим выбрать плейлист (кнопки)
+
             kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            for p in pls_user:
+            for p in my:
                 kb.add(p["name"])
-            kb.add("➕ Создать плейлист", "🔙 В меню")
-            # временно сохраняем в state, что мы ждём выбора плейлиста для добавления
-            state["awaiting_add_song_id"] = last_song_id
-            user_state.save_user_state(user_id, state)
+            kb.add("🔙 В меню")
+
+            st["awaiting_add_song_id"] = last
+            user_state.save_user_state(uid, st)
+
             bot.send_message(chat, "Выберите плейлист для добавления:", reply_markup=kb)
             return
 
-    # ---- Плейлисты: показать / создать / добавить ----
-    @bot.message_handler(func=lambda m: m.text == "📂 Плейлисты")
-    def show_playlists(message):
-        user_id = message.from_user.id
-        pls_all = load_json(PLAYLISTS_FILE, {})
-        pls_user = pls_all.get(str(user_id), [])
-        if not pls_user:
-            bot.send_message(message.chat.id, "📂 У вас пока нет плейлистов.", reply_markup=create_playlist_kb())
-            return
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for p in pls_user:
-            kb.add(p["name"])
-        kb.add("➕ Создать плейлист", "🔙 В меню")
-        bot.send_message(message.chat.id, "Ваши плейлисты:", reply_markup=kb)
-
-    # обработка создания нового плейлиста
-    @bot.message_handler(func=lambda m: m.text == "➕ Создать плейлист")
-    def create_playlist_start(message):
-        bot.send_message(message.chat.id, "Введите имя нового плейлиста:")
-        bot.register_next_step_handler(message, create_playlist_name)
-
-    def create_playlist_name(message):
-        name = (message.text or "").strip()
-        if not name:
-            bot.send_message(message.chat.id, "Имя не может быть пустым.", reply_markup=main_menu_kb())
-            return
-        user_id = message.from_user.id
-        pls_all = load_json(PLAYLISTS_FILE, {})
-        pls_user = pls_all.get(str(user_id), [])
-        if any(p["name"].lower() == name.lower() for p in pls_user):
-            bot.send_message(message.chat.id, "Плейлист с таким именем уже существует.", reply_markup=main_menu_kb())
-            return
-        pls_user.append({"name": name, "songs": []})
-        pls_all[str(user_id)] = pls_user
-        save_json(PLAYLISTS_FILE, pls_all)
+    # --- СОЗДАНИЕ ПЛЕЙЛИСТА ---
+    @bot.message_handler(func=lambda m: _norm(m.text) == _norm("➕ создать плейлист"))
+    def cmd_create_playlist(msg):
+        pls = load_json(PLAYLISTS_FILE, [])
+        new_pl = {
+            "id": len(pls) + 1,
+            "owner_id": msg.from_user.id,
+            "name": f"Мой плейлист {len(pls) + 1}",
+            "public": True,
+            "songs": [],
+        }
+        pls.append(new_pl)
+        save_json(PLAYLISTS_FILE, pls)
         update_stats("playlists_created")
-        bot.send_message(message.chat.id, f"✅ Плейлист «{name}» создан.", reply_markup=main_menu_kb())
+        bot.send_message(msg.chat.id, f"✅ Создан новый плейлист: {new_pl['name']}", reply_markup=kb_playlist_base())
 
-    # обработка выбора плейлиста (в т.ч. для добавления песни)
+    # --- ДОБАВЛЕНИЕ ПЕСНИ ---
     @bot.message_handler(func=lambda m: True)
-    def playlist_selection_and_other(message):
-        txt = (message.text or "").strip()
-        user_id = message.from_user.id
-        # сначала проверим: возможно пользователь выбрал существующий плейлист (название)
-        pls_all = load_json(PLAYLISTS_FILE, {})
-        pls_user = pls_all.get(str(user_id), [])
-        matching = next((p for p in pls_user if p["name"] == txt), None)
-        if matching:
-            # если в state есть awaiting_add_song_id -> добавляем туда
-            state = user_state.get_user_state(user_id)
-            pending = state.get("awaiting_add_song_id")
-            if pending:
-                # добавляем song id (int)
-                if pending not in matching["songs"]:
-                    matching["songs"].append(pending)
-                    save_json(PLAYLISTS_FILE, pls_all)
-                    bot.send_message(message.chat.id, f"✅ Песня добавлена в плейлист «{matching['name']}»", reply_markup=main_menu_kb())
-                    # очистим ожидание
-                    state.pop("awaiting_add_song_id", None)
-                    user_state.save_user_state(user_id, state)
-                    return
+    def handle_all(msg):
+        uid = msg.from_user.id
+        st = user_state.get_user_state(uid)
+        song_id = st.get("awaiting_add_song_id")
+
+        if song_id and msg.text:
+            pls = load_json(PLAYLISTS_FILE, [])
+            pl = next((p for p in pls if p["owner_id"] == uid and _norm(p["name"]) == _norm(msg.text)), None)
+
+            if pl:
+                if song_id not in pl["songs"]:
+                    pl["songs"].append(song_id)
+                    save_json(PLAYLISTS_FILE, pls)
+                    bot.send_message(msg.chat.id, "✅ Песня добавлена в плейлист!", reply_markup=kb_player())
                 else:
-                    bot.send_message(message.chat.id, "Песня уже в плейлисте.", reply_markup=main_menu_kb())
-                    state.pop("awaiting_add_song_id", None)
-                    user_state.save_user_state(user_id, state)
-                    return
-            # если просто захотел проиграть плейлист — отправляем все песни
-            if matching.get("songs"):
-                bot.send_message(message.chat.id, f"▶️ Воспроизвожу плейлист «{matching['name']}»...")
-                # удаляем старые контролы — у тебя это можно реализовать отдельно, но тут просто отправим песни
-                for sid in matching["songs"]:
-                    s = next((x for x in load_json(SONGS_FILE, []) if x["id"] == sid), None)
-                    if s:
-                        bot.send_audio(message.chat.id, s.get("url", "").replace("file_id:", ""), caption=f"{s.get('name')} — {s.get('artist')}")
-                bot.send_message(message.chat.id, "Готово.", reply_markup=main_menu_kb())
-                return
+                    bot.send_message(msg.chat.id, "⚠️ Песня уже в этом плейлисте.", reply_markup=kb_player())
             else:
-                bot.send_message(message.chat.id, "Плейлист пуст.", reply_markup=main_menu_kb())
-                return
+                bot.send_message(msg.chat.id, "⚠️ Плейлист не найден.", reply_markup=kb_main())
 
-        # если не совпало с именем плейлиста — ничего не делаем здесь (другие обработчики выше уже)
-        # для прочих случаев — не шлём ошибки, а попросим использовать меню
-        if txt not in {"🎲 Рандом", "🎧 Жанры", "🔍 Поиск", "📂 Плейлисты", "🎤 Предложить песню", "🔙 В меню", "⏮ Назад", "⏭ Вперёд", "➕ В плейлист", "➕ Создать плейлист"}:
-            bot.send_message(message.chat.id, "📱 Используйте кнопки меню.", reply_markup=main_menu_kb())
+            st.pop("awaiting_add_song_id", None)
+            user_state.save_user_state(uid, st)
+            return
 
-    # ---- отправка песни (с контролами) ----
-    def send_song(bot_obj, chat_id, song):
-        audio_id = song.get("url", "").replace("file_id:", "")
-        caption = f"🎵 <b>{song.get('name')}</b>\n👤 {song.get('artist')}\n🎼 {song.get('genre')} | 🌐 {song.get('lang')}"
-        try:
-            bot_obj.send_audio(chat_id, audio_id, caption=caption, parse_mode="HTML")
-        except Exception:
-            # на всякий случай — если отправка через file_id не работает, пробуем как есть
-            try:
-                bot_obj.send_audio(chat_id, song.get("url"))
-            except Exception as e:
-                bot_obj.send_message(chat_id, f"Ошибка отправки аудио: {e}")
-                return
-        # контрольные кнопки (reply keyboard)
-        bot_obj.send_message(chat_id, "🎧 Управление плеером:", reply_markup=player_kb())
-
-    # экспорт функции в глобальную область (если другие модули хотят вызвать)
-    globals()["send_song"] = send_song
+        # Если ничего не подходит
+        bot.send_message(msg.chat.id, "📱 Пожалуйста, используйте кнопки меню.", reply_markup=kb_main())
